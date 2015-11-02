@@ -13,25 +13,34 @@ namespace CameraFileArchive
 {
     public partial class MainForm : Form
     {
-        private RegistryKey regKey = Registry.LocalMachine.CreateSubKey("SOFTWARE\\CameraPhotoArchive");
-        private FileInfo[] jpgFiles;
+        private RegistryKey regKey = Registry.CurrentUser.CreateSubKey("SOFTWARE\\CameraArchive");
+        private DriveInfo[] allDrives = DriveInfo.GetDrives();
+        private List<FileInfo> filesList = new List<FileInfo>();
         private DateTime lastProgressUpdate;
 
         public MainForm()
         {
             InitializeComponent();
-            textBoxSrc.Text = (string)regKey.GetValue("LastSrc", "");
+            foreach( DriveInfo drive in this.allDrives )
+            {
+                if (drive.DriveType == DriveType.Fixed    ||
+                    drive.DriveType == DriveType.Removable  )
+                {
+                    srcDrive.Items.Add(drive.Name);
+                }
+            }
+            srcDrive.SelectedItem = (string)regKey.GetValue("LastSrc", "");
             textBoxDst.Text = (string)regKey.GetValue("LastDst", "");
         }
 
         private void BrowseSrcButton_Click(object sender, EventArgs e)
         {
-            if (textBoxSrc.Text != "")
-                folderBrowserDialog.SelectedPath = textBoxSrc.Text;
+            //if (textBoxSrc.Text != "")
+            //    folderBrowserDialog.SelectedPath = textBoxSrc.Text;
 
-            folderBrowserDialog.ShowNewFolderButton = false;
-            folderBrowserDialog.ShowDialog();
-            textBoxSrc.Text = folderBrowserDialog.SelectedPath;
+            //folderBrowserDialog.ShowNewFolderButton = false;
+            //folderBrowserDialog.ShowDialog();
+            //textBoxSrc.Text = folderBrowserDialog.SelectedPath;
         }
 
         private void BrowseDstButton_Click(object sender, EventArgs e)
@@ -46,14 +55,13 @@ namespace CameraFileArchive
 
         private void GoButton_Click(object sender, EventArgs e)
         {
-            DialogResult result = DialogResult.Yes;
-
             if ("Go" == GoButton.Text)
             {
-                if (Directory.Exists(textBoxSrc.Text) == false)
+                //Safety checks
+                if (Directory.Exists(srcDrive.SelectedItem.ToString()) == false)
                 {
-                    MessageBox.Show("The source path does not exsist!",
-                                "Check path", MessageBoxButtons.OK, MessageBoxIcon.Exclamation);
+                    MessageBox.Show("The source drive is not accessible!",
+                                "Check drive", MessageBoxButtons.OK, MessageBoxIcon.Exclamation);
                     return;
                 }
                 if (Directory.Exists(textBoxDst.Text) == false)
@@ -62,34 +70,25 @@ namespace CameraFileArchive
                                 "Check path", MessageBoxButtons.OK, MessageBoxIcon.Exclamation);
                     return;
                 }
-                if (textBoxSrc.Text.Contains("DCIM") != true)
-                {
-                    result = MessageBox.Show("The path does not contain 'DCIM' " +
-                                "which is normal for a camera memory card.\n\n" +
-                                "Are you sure you want to continue?",
-                                "Check path", MessageBoxButtons.YesNo, MessageBoxIcon.Question);
-                    if (result == DialogResult.No)
-                        return;
-                }
-                if (textBoxDst.Text.Substring(textBoxDst.Text.Length - 1) != "\\")
-                {
-                    textBoxDst.Text = textBoxDst.Text + "\\";
-                }
-                DirectoryInfo di = new DirectoryInfo(textBoxSrc.Text);
-                jpgFiles = di.GetFiles("*.jpg");
 
                 //Store last used paths...
-                regKey.SetValue("LastSrc", textBoxSrc.Text, RegistryValueKind.String);
+                regKey.SetValue("LastSrc", srcDrive.SelectedItem.ToString(), RegistryValueKind.String);
                 regKey.SetValue("LastDst", textBoxDst.Text, RegistryValueKind.String);
+
+                //Locate all files to copy
+                DirSearch(srcDrive.SelectedItem.ToString(), "*.jpg");
+                DirSearch(srcDrive.SelectedItem.ToString(), "*.mts");
 
                 //Prepare userinterface for copy action...
                 listBox.ResetText();
-                listBox.Items.Add("Found " + jpgFiles.Count() + " files to copy\n");
-                progressBar.Maximum = jpgFiles.Count();
+                listBox.Items.Add("Found " + filesList.Count() + " files to copy\n");
+                progressBar.Maximum = filesList.Count();
                 progressBar.Value = 0;
                 progressBar.Visible = true;
                 progress.Visible = true;
                 GoButton.Text = "Cancel";
+                srcDrive.Enabled = false;
+                textBoxDst.Enabled = false;
 
                 //Start copy
                 lastProgressUpdate = System.DateTime.Now;
@@ -110,10 +109,10 @@ namespace CameraFileArchive
         private void bw_DoWork(object sender, DoWorkEventArgs e)
         {
             BackgroundWorker worker = sender as BackgroundWorker;
-            string destPath = "";
-            int i = 0;
+            string destPath = "", result = "";
+            int copyCnt = 0, skipCnt = 0;
 
-            foreach (FileInfo file in jpgFiles)
+            foreach (FileInfo file in filesList.ToArray())
             {
                 if ((worker.CancellationPending == true))
                 {
@@ -132,10 +131,28 @@ namespace CameraFileArchive
                 if (File.Exists(destPath + file.Name) == false)
                 {
                     file.CopyTo(destPath + file.Name);
+                    copyCnt++;
                 }
-                worker.ReportProgress(i++, DateTime.Now);
+                else
+                {
+                    listBox.Items.Add("Skipped " + file.Name);
+                    skipCnt++;
+                }
+                worker.ReportProgress((copyCnt + skipCnt), DateTime.Now);
             }
-            e.Result = "Copied " + i + " files.";
+            if (copyCnt > 0)
+            {
+                result = "copied " + copyCnt + " files";
+            }
+            if (skipCnt > 0)
+            {
+                if (result.Length > 0)
+                {
+                    result += ", ";
+                }
+                result += "skipped " + skipCnt + " files";
+            }
+            e.Result = result;
         }
 
         //This event is raised on the main thread.  
@@ -147,7 +164,7 @@ namespace CameraFileArchive
             progressBar.Value = e.ProgressPercentage; //update progress bar  
             TimeSpan diff = time - lastProgressUpdate;
 
-            float speed = (float)((jpgFiles[e.ProgressPercentage].Length / (1024 * 1024)) / diff.TotalSeconds);
+            float speed = (float)((filesList.ToArray()[e.ProgressPercentage].Length / (1024 * 1024)) / diff.TotalSeconds);
             if (speed < 100)
             {
                 progress.Text = progressBar.Value.ToString() + "/" +
@@ -176,10 +193,32 @@ namespace CameraFileArchive
             {
                 MessageBox.Show("Error. Details: " + (e.Error as Exception).ToString());
             }
-            else
+
+            GoButton.Text = "Go";
+            srcDrive.Enabled = true;
+            textBoxDst.Enabled = true;
+            progressBar.Value = 0;
+            listBox.Items.Add(e.Result.ToString());
+        }
+
+        //Create a list of files that match the search condition in all of the subdirectories
+        // in and below the supplied sDir
+        private void DirSearch(string sDir, string search)
+        {
+            try
             {
-                GoButton.Text = "Go";
-                listBox.Items.Add(e.Result.ToString());
+                foreach (string d in Directory.GetDirectories(sDir))
+                {
+                    foreach (string f in Directory.GetFiles(d, search))
+                    {
+                        filesList.Add( new FileInfo(f) );
+                    }
+                    DirSearch(d, search);
+                }
+            }
+            catch (System.Exception excpt)
+            {
+                Console.WriteLine(excpt.Message);
             }
         }
     }
