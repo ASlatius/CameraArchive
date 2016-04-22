@@ -109,7 +109,7 @@ namespace CameraFileArchive
         private void bw_DoWork(object sender, DoWorkEventArgs e)
         {
             BackgroundWorker worker = sender as BackgroundWorker;
-            string destPath = "", result = "";
+            string destPath = "", result = "", trailSlash = "";
             int copyCnt = 0, skipCnt = 0;
 
             foreach (FileInfo file in filesList.ToArray())
@@ -119,7 +119,10 @@ namespace CameraFileArchive
                     e.Cancel = true;
                     break;
                 }
-                destPath = textBoxDst.Text +
+                if (textBoxDst.Text.Substring(textBoxDst.Text.Length - 1) != "\\") {
+                    trailSlash = "\\";
+                }
+                destPath = textBoxDst.Text + trailSlash + 
                            file.LastWriteTime.Year.ToString("0000") + "_" +
                            file.LastWriteTime.Month.ToString("00") + "_" +
                            file.LastWriteTime.Day.ToString("00") + "\\";
